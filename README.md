@@ -3,7 +3,7 @@ cbor-debug
 
 Visualise CBOR documents (in-browser).
 
-[Give it a go!](https://geraintluff.github.io/cbor-debug/)
+[Give it a go!](http://geraintluff.github.io/cbor-debug/)
 
 ## Known shortcomings
 
