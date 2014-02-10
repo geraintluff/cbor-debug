@@ -1,0 +1,307 @@
+<html>
+	<head>
+		<title>CBOR debugger</title>
+	</head>
+	<script>
+		var hexDigits = '0123456789ABCDEF';
+		var byteToHex = [];
+		var hexToByte = {};
+		for (var byteValue = 0; byteValue < 256; byteValue++) {
+			var hexValue = hexDigits.charAt(byteValue>>4) + hexDigits.charAt(byteValue&0x0f);
+			byteToHex[byteValue] = hexValue;
+			hexToByte[hexValue] = byteValue;
+		}
+		function hexToUtf8(hexString) {
+			var escaped = "";
+			for (var i = 0; i < hexString.length; i += 2) {
+				escaped += '%' + hexString.substring(i, i + 2);
+			}
+			try {
+				return decodeURIComponent(escaped);
+			} catch (e) {
+				throw new Error('UTF-8 decode error');
+			}
+		}
+
+		function cborHexDecodeType(hex, pos) {
+			var firstByte = hexToByte[hex.substring(pos, pos += 2)];
+			var majorType = firstByte>>5, value = firstByte&0x1f;
+			//annotate(pos - 2, 'type ' + majorType + ', additional ' + value);
+			if (value === 31) {
+				// Special value for indefinite-length arrays/objects
+				value = null;
+			} else if (value > 27) {
+				throw new Error('Unrecognised extra value: ' + value);
+			} else if (value >= 24) {
+				var extraBytes = {
+					24: 0,
+					25: 1,
+					26: 3,
+					27: 7
+				}[value];
+				//annotate(pos, extraBytes + ' extra byte(s)');
+				value = hexToByte[hex.substring(pos, pos += 2)];
+				// Decode as big-endian unsigned int
+				while (extraBytes--) {
+					value = value*256 + hexToByte[hex.substring(pos, pos += 2)];
+				}
+				//annotate(null, 'value: ' + value);
+			}
+			return {
+				type: majorType,
+				value: value,
+				nextPos: pos
+			}
+		}
+		function cborHexDecode(hex, pos) {
+			if (pos >= hex.length) throw new TypeError('Unexpected end of input');
+			annotate(pos, '');
+			var majorType = cborHexDecodeType(hex, pos);
+			pos = majorType.nextPos;
+			if (majorType.type === 0) {
+				annotate(null, 'positive integer: ' + majorType.value);
+				return {
+					value: majorType.value,
+					nextPos: pos
+				};
+			} else if (majorType.type === 1) {
+				annotate(null, 'negative integer: ' + (-1 - majorType.value));
+				return {
+					value: -1 -majorType.value,
+					nextPos: pos
+				};
+			} else if (majorType.type === 2) {
+				annotate(null, 'byte sequence (length ' + majorType.value + ')');
+				// Byte sequence
+				var length = majorType.value;
+				return {
+					value: hex.substring(pos, pos + length*2),
+					nextPos: pos + length*2
+				};
+			} else if (majorType.type === 3) {
+				// UTF-8 string
+				annotate(null, 'UTF-8 string (length ' + majorType.value + ')');
+				indent(1, pos);
+				var length = majorType.value;
+				var stringHex = hex.substring(pos, pos + length*2);
+				try {
+					annotate(pos, '<span class="literal">' + JSON.stringify(hexToUtf8(stringHex)).replace(/</g, '&lt;') + '</span>');
+				} catch (e) {
+					// nothing
+				}
+				indent(-1, pos + length*2);
+				return {
+					value: hexToUtf8(stringHex),
+					nextPos: pos + length*2
+				};
+			} else if (majorType.type === 4 || majorType.type === 5) {
+				// Array
+				var length = (majorType.value == null) ? '???' : majorType.value;
+				if (majorType.type === 4) {
+					annotate(null, '<span class="composite">Array (length ' + length + ')</span>');
+				} else {
+					annotate(null, '<span class="composite">Object (' + length + ' pairs)</span>');
+				}
+				indent(1, pos);
+				var length = majorType.value;
+				var result = [];
+				if (length !== null) {
+					if (majorType.type === 5) {
+						// Want key/value pairs
+						length *= 2;
+					}
+					for (var i = 0; i < length; i++) {
+						var item = cborHexDecode(hex, pos);
+						result.push(item.value);
+						pos = item.nextPos;
+					}
+				} else {
+					var breakCode = byteToHex[0xff];
+					while (hex.substring(pos, pos + 2) !== breakCode) {
+						var item = cborHexDecode(hex, pos);
+						result.push(item.value);
+						pos = item.nextPos;
+					}
+					annotate(pos, '<span class="break-code">break code</span>');
+					pos += 2; // Break code
+				}
+				if (majorType.type === 5) {
+					var obj = {};
+					for (var i = 0; i < result.length; i += 2) {
+						obj[result[i]] = result[i + 1];
+					}
+					result = obj;
+				}
+				indent(-1, pos);
+				return {
+					value: result,
+					nextPos: pos
+				};
+			} else if (majorType.type === 6) {
+				annotate(null, 'Semantic annotation: ' + majorType.value);
+				indent(1, pos);
+				var item = cborHexDecode(hex, pos);
+				indent(-1, item.nextPos);
+				// Format-specific enhancements
+				if (majorType.value === 0 && typeof item.value === 'string') {
+					item.value = new Date(item.value); // date-time string
+				} else if (majorType.value === 1 && typeof item.value === 'number') {
+					item.value = new Date(item.value*1000); // UTC seconds
+				}
+				return {
+					value: item.value,
+					nextPos: item.nextPos
+				};
+			} else if (majorType.type === 7) {
+				if (majorType.value === 20) {
+					annotate(null, '<span class="literal">false</span>');
+					return {value: false, nextPos: pos};
+				} else if (majorType.value === 21) {
+					annotate(null, '<span class="literal">true</span>');
+					return {value: true, nextPos: pos};
+				} else if (majorType.value === 22) {
+					annotate(null, '<span class="literal">null</span>');
+					return {value: null, nextPos: pos};
+				} else if (majorType.value === 23) {
+					annotate(null, '<span class="literal">undefined</span>');
+					return {value: undefined, nextPos: pos};
+				}
+				throw new Error('Unknown simple value: ' + majorType.value);
+			}
+		}
+	</script>
+	<style>
+		body {
+			background-color: #048;
+			color: #EEE;
+			font-family: "Verdana", sans-serif;
+		}
+	
+		#cbor-hex {
+			width: 100%;
+			height: 8em;
+			font-family: monospace;
+			margin: 0;
+			border-radius: 5px;
+			padding: 0.4em;
+			background-color: #FCFEFF;
+			border: 2px solid #000;
+		}
+		#go-button {
+			display: block;
+			width: 100%;
+			border-radius: 5px;
+			height: 2em;
+			margin-top: 0.5em;
+			background-color: #DEF;
+			font-size: 0.9em;
+			border: 2px solid #000;
+		}
+		#go-button:hover {
+			background-color: #FFF;
+			cursor: pointer;
+		}
+		
+		#result {
+			padding: 0.5em;
+			margin: 3px;
+			margin-top: 1em;
+			border-radius: 5px;
+			background-color: #195792;
+		}
+		
+		#result .invisible {
+			color: #195792;
+		}
+		
+		.hex {
+		}
+		
+		.comment {
+			font-family: Verdana, sans-serif;
+			font-size: 0.8em;
+			font-style: italic;
+			color: #8BD;
+			margin-left: 3em;
+		}
+		
+		.error {
+			color: #F66;
+			text-shadow: 0px 0px 2px #000;
+		}
+		
+		.break-code {
+			color: #FB8;
+		}
+
+		.composite {
+			color: #8F8;
+		}
+		
+		.literal {
+			color: #FF8;
+		}
+		
+		.indent {
+			padding-left: 4ex;
+		}
+		
+	</style>
+	<body>
+		<p>Paste your CBOR (as hexidecimal):</p>
+		<textarea id="cbor-hex">bf61610161629f0203ffff</textarea>
+		<input type="button" id="go-button" value="GO">
+		<pre id="result">
+		</pre>
+		<script>
+			var hexInput = document.getElementById('cbor-hex');
+			var goButton = document.getElementById('go-button');
+			var result = document.getElementById('result');
+			var decoded, annotate, indent;
+			goButton.onclick = function () {
+				var htmlLines = [];
+				var hex = hexInput.value = hexInput.value.replace(/0x/, '').replace(/\/\/[^\n]*/g, '').replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+				var lastPos = 0, lastLabel = '';
+				annotate = function (pos, label) {
+					pos = pos || lastPos;
+					if (pos === lastPos) {
+						lastLabel = lastLabel + (lastLabel && label? ', ' : '') + label;
+						return;
+					}
+					var hextract = hex.substring(lastPos, pos);
+					line = '<div class="line">';
+					line += '<span class="hex">' + hextract + '</span> <span class="invisible">//</span> <span class="comment">' + lastLabel + '</span>';
+					line += '</div>';
+					htmlLines.push(line);
+					
+					lastPos = pos;
+					lastLabel = label;
+				};
+				indent = function (amount, pos) {
+					annotate(pos, '');
+					while (amount > 0) {
+						htmlLines.push('<div class="indent">');
+						amount--;
+					}
+					while (amount < 0) {
+						htmlLines.push('</div>');
+						amount++;
+					}
+				};
+				
+				try {
+					decoded = cborHexDecode(hex, 0);
+					annotate(hex.length, 'end of input');
+					result.innerHTML = htmlLines.join('');
+				} catch (e) {
+					annotate(lastPos, '<span class="error">' + e.message + '</span>');
+					annotate(lastPos + 2, 'end of input');
+					result.innerHTML = htmlLines.join('');
+					throw e;
+				}
+				console.log(decoded);
+			};
+			goButton.onclick();
+		</script>
+	</body>
+</html>
