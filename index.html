@@ -72,8 +72,12 @@
 				};
 			} else if (majorType.type === 2) {
 				annotate(null, 'byte sequence (length ' + majorType.value + ')');
+				indent(1, pos)
 				// Byte sequence
 				var length = majorType.value;
+				var byteHex = hex.substring(pos, pos + length*2);
+				annotate(pos, 'binary');
+				indent(-1, pos+length*2);
 				return {
 					value: hex.substring(pos, pos + length*2),
 					nextPos: pos + length*2
