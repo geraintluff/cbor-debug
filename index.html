@@ -39,13 +39,18 @@
 					26: 3,
 					27: 7
 				}[value];
-				//annotate(pos, extraBytes + ' extra byte(s)');
-				value = hexToByte[hex.substring(pos, pos += 2)];
-				// Decode as big-endian unsigned int
-				while (extraBytes--) {
-					value = value*256 + hexToByte[hex.substring(pos, pos += 2)];
+				if (majorType == 7) {
+					value = 'float:' + hex.substring(pos, pos + 2 + 2*extraBytes);
+					pos += 2 + 2*extraBytes;
+				} else {
+					//annotate(pos, extraBytes + ' extra byte(s)');
+					value = hexToByte[hex.substring(pos, pos += 2)];
+					// Decode as big-endian unsigned int
+					while (extraBytes--) {
+						value = value*256 + hexToByte[hex.substring(pos, pos += 2)];
+					}
+					//annotate(null, 'value: ' + value);
 				}
-				//annotate(null, 'value: ' + value);
 			}
 			return {
 				type: majorType,
@@ -157,7 +162,10 @@
 					nextPos: item.nextPos
 				};
 			} else if (majorType.type === 7) {
-				if (majorType.value === 20) {
+				if (typeof majorType.value == 'string') {
+					annotate(null, majorType.value);
+					return {value: false, nextPos: pos};
+				} else if (majorType.value === 20) {
 					annotate(null, '<span class="literal">false</span>');
 					return {value: false, nextPos: pos};
 				} else if (majorType.value === 21) {
